@@ -14,6 +14,7 @@ from scipy.linalg import LinAlgError, qr, svd
 from scipy.sparse import csc_matrix
 
 from ..base import BaseEstimator, ClusterMixin, _fit_context
+#from ..manifold._spectral_embedding import _spectral_embedding
 from ..manifold._spectral_embedding import _spectral_embedding
 from ..metrics.pairwise import KERNEL_PARAMS, pairwise_kernels
 from ..neighbors import NearestNeighbors, kneighbors_graph
@@ -55,7 +56,7 @@ def cluster_qr(vectors):
 
 
 def discretize(
-    vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20, random_state=None
+    vectors, *, copy=True, max_svd_restarts=30, n_iter_max=20, random_state=None,overlap_vector=None,
 ):
     """Search for a partition matrix which is closest to the eigenvector embedding.
 
@@ -80,6 +81,9 @@ def discretize(
         Determines random number generation for rotation matrix initialization.
         Use an int to make the randomness deterministic.
         See :term:`Glossary <random_state>`.
+
+    overlap_vector : array-like of shape (n_samples)
+        0/1 vector denoting which sample belongs to more than 1 cluster.
 
     Returns
     -------
@@ -166,6 +170,26 @@ def discretize(
                 (np.ones(len(labels)), (np.arange(0, n_samples), labels)),
                 shape=(n_samples, n_components),
             )
+            
+
+
+            ## this code is from https://github.com/desh2608/scikit-learn/blob/overlap/sklearn/cluster/_spectral.py
+            ## it is used to process overlap  case,
+            labels_second = None
+            if (overlap_vector is not None) and (t_discrete.argsort(axis=1).shape[1] >= 2):
+                labels_second = t_discrete.argsort(axis=1)[:, -2]
+                vectors_discrete_second = csc_matrix(
+                    (
+                        np.ones(len(labels_second)),
+                        (np.arange(0, n_samples), labels_second),
+                    ),
+                    shape=(n_samples, n_components),
+                )
+                vectors_ovl = vectors_discrete_second.multiply(overlap.reshape(-1, 1))
+                vectors_discrete += vectors_ovl
+                assert np.sum(vectors_discrete) == np.sum(overlap) + n_samples
+
+
 
             t_svd = vectors_discrete.T * vectors
 
@@ -179,6 +203,13 @@ def discretize(
             ncut_value = 2.0 * (n_samples - S.sum())
             if (abs(ncut_value - last_objective_value) < eps) or (n_iter > n_iter_max):
                 has_converged = True
+                ## this code is used to process overlap case.
+                new_labels = []
+                for i in range(len(overlap_vector)):
+                    if overlap[i] == 1 and labels_second is not None:
+                        new_labels.append((labels[i], labels_second[i]))
+                    else:
+                        new_labels.append(labels[i])
             else:
                 # otherwise calculate rotation and continue
                 last_objective_value = ncut_value
@@ -204,6 +235,7 @@ def spectral_clustering(
     eigen_tol="auto",
     assign_labels="kmeans",
     verbose=False,
+    overlap_vector=None,
 ):
     """Apply clustering to a projection of the normalized Laplacian.
 
@@ -280,7 +312,7 @@ def spectral_clustering(
         .. versionadded:: 1.2
            Added 'auto' option.
 
-    assign_labels : {'kmeans', 'discretize', 'cluster_qr'}, default='kmeans'
+    assign_labels : {'kmeans', 'discretize', 'cluster_qr','discretize_ovl'}, default='kmeans'
         The strategy to use to assign labels in the embedding
         space.  There are three ways to assign labels after the Laplacian
         embedding.  k-means can be applied and is a popular choice. But it can
@@ -296,6 +328,9 @@ def spectral_clustering(
 
     verbose : bool, default=False
         Verbosity mode.
+
+    overlap_vector : array-like of shape (n_samples)
+        0/1 vector denoting which sample belongs to more than 1 cluster.
 
         .. versionadded:: 0.24
 
@@ -371,6 +406,7 @@ def spectral_clustering(
         eigen_tol=eigen_tol,
         assign_labels=assign_labels,
         verbose=verbose,
+        overlap_vector=overlap_vector
     ).fit(affinity)
 
     return clusterer.labels_
@@ -481,7 +517,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
         .. versionadded:: 1.2
            Added 'auto' option.
 
-    assign_labels : {'kmeans', 'discretize', 'cluster_qr'}, default='kmeans'
+    assign_labels : {'kmeans', 'discretize', 'cluster_qr', 'discretize_ovl'}, default='kmeans'
         The strategy for assigning labels in the embedding space. There are two
         ways to assign labels after the Laplacian embedding. k-means is a
         popular choice, but it can be sensitive to initialization.
@@ -517,6 +553,8 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
     verbose : bool, default=False
         Verbosity mode.
 
+    overlap_vector : np.int
+        0/1 vector denoting which segments are overlapping.
         .. versionadded:: 0.24
 
     Attributes
@@ -628,6 +666,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
         "kernel_params": [dict, None],
         "n_jobs": [Integral, None],
         "verbose": ["verbose"],
+        "overlap_vector": ["array-like",None],
     }
 
     def __init__(
@@ -648,6 +687,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
         kernel_params=None,
         n_jobs=None,
         verbose=False,
+        overlap_vector=None,
     ):
         self.n_clusters = n_clusters
         self.eigen_solver = eigen_solver
@@ -664,6 +704,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
         self.kernel_params = kernel_params
         self.n_jobs = n_jobs
         self.verbose = verbose
+        self.overlap_vector = overlap_vector
 
     @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y=None):
@@ -762,8 +803,10 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
             )
         elif self.assign_labels == "cluster_qr":
             self.labels_ = cluster_qr(maps)
-        else:
-            self.labels_ = discretize(maps, random_state=random_state)
+        elif self.assign_labels == 'discretize':
+            self.labels_ = discretize(maps, random_state=random_state,overlap_vector=None)
+        elif self.assign_labels == 'discretize_ovl':
+            self.labels_ = discretize(maps, random_state=random_state,overlap_vector=self.overlap_vector)
 
         return self
 
