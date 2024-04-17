@@ -185,9 +185,9 @@ def discretize(
                     ),
                     shape=(n_samples, n_components),
                 )
-                vectors_ovl = vectors_discrete_second.multiply(overlap.reshape(-1, 1))
+                vectors_ovl = vectors_discrete_second.multiply(overlap_vector.reshape(-1, 1))
                 vectors_discrete += vectors_ovl
-                assert np.sum(vectors_discrete) == np.sum(overlap) + n_samples
+                assert np.sum(vectors_discrete) == np.sum(overlap_vector) + n_samples
 
 
 
@@ -206,7 +206,7 @@ def discretize(
                 ## this code is used to process overlap case.
                 new_labels = []
                 for i in range(len(overlap_vector)):
-                    if overlap[i] == 1 and labels_second is not None:
+                    if overlap_vector[i] == 1 and labels_second is not None:
                         new_labels.append((labels[i], labels_second[i]))
                     else:
                         new_labels.append(labels[i])
@@ -660,7 +660,7 @@ class SpectralClustering(ClusterMixin, BaseEstimator):
             Interval(Real, 0.0, None, closed="left"),
             StrOptions({"auto"}),
         ],
-        "assign_labels": [StrOptions({"kmeans", "discretize", "cluster_qr"})],
+        "assign_labels": [StrOptions({"kmeans", "discretize", "cluster_qr","discretize_ovl"})],
         "degree": [Interval(Real, 0, None, closed="left")],
         "coef0": [Interval(Real, None, None, closed="neither")],
         "kernel_params": [dict, None],
